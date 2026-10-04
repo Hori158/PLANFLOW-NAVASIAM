@@ -3,31 +3,41 @@ import {
   RefreshCw, 
   History, 
   Zap, 
-  ExternalLink 
+  ExternalLink,
+  Share2,
+  LockKeyhole,
+  Database
 } from 'lucide-react';
-import { SyncConfig } from '../types';
 
 interface HeaderProps {
-  syncConfig: SyncConfig;
   isSyncing: boolean;
   onManualSync: () => void;
   onSimulateAppSheetUpdate: () => void;
   onOpenSetup: () => void;
   onOpenAuditLogs: () => void;
   onOpenNewPlanModal: () => void;
+  onOpenCloudSetup: () => void;
+  onOpenCloudAccess: () => void;
+  onShareLiveView: () => void;
+  canEditPlans: boolean;
+  cloudConfigured: boolean;
   lastSyncFormatted: string;
   stats: { total: number; completed: number; overdue: number; inProgress: number };
   headlines: string;
 }
 
 export const Header: React.FC<HeaderProps> = ({
-  syncConfig,
   isSyncing,
   onManualSync,
   onSimulateAppSheetUpdate,
   onOpenSetup,
   onOpenAuditLogs,
   onOpenNewPlanModal,
+  onOpenCloudSetup,
+  onOpenCloudAccess,
+  onShareLiveView,
+  canEditPlans,
+  cloudConfigured,
   lastSyncFormatted,
   stats,
   headlines
@@ -116,13 +126,14 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="flex items-center gap-2 font-type text-[11px] whitespace-nowrap pr-2 border-r border-[var(--ink)]/40 mr-1">
             <span className={`w-2 h-2 rounded-full ${isSyncing ? 'bg-amber-500 animate-ping' : 'bg-[var(--green-ink)] animate-pulse'}`}></span>
             <span>
-              {isSyncing ? 'กำลังพิมพ์ฉบับใหม่...' : `สายไฟล่าสุด ${lastSyncFormatted || '--:--:--'}`} · {syncConfig.isLiveMode ? 'LIVE' : 'SIM'}
+              {isSyncing ? 'กำลังอัปเดตข้อมูล...' : `อัปเดตล่าสุด ${lastSyncFormatted || '--:--:--'}`} · {cloudConfigured ? 'LIVE' : 'LOCAL'}
             </span>
           </div>
 
           {/* Simulate AppSheet */}
           <button
             onClick={onSimulateAppSheetUpdate}
+            disabled={!canEditPlans}
             title="จำลองเหตุการณ์ทีมงานอัปเดตงานผ่าน AppSheet"
             className="btn-ink text-[11px] px-3 py-1.5 flex items-center gap-1.5"
           >
@@ -165,11 +176,43 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="md:hidden">Sheets</span>
           </button>
 
+          <button
+            onClick={onOpenCloudSetup}
+            title="ตั้งค่าฐานข้อมูลกลางและลิงก์แชร์แบบเรียลไทม์"
+            className="btn-ink text-[11px] px-3 py-1.5 flex items-center gap-1.5"
+          >
+            <Database className="w-3.5 h-3.5" />
+            <span className="hidden lg:inline">คลาวด์ / แชร์</span>
+            <span className="lg:hidden">คลาวด์</span>
+          </button>
+
+          <button
+            onClick={onShareLiveView}
+            title="คัดลอกลิงก์ดูข้อมูลล่าสุดแบบเรียลไทม์ โดยเปิดดูได้อย่างเดียว"
+            className="btn-ink text-[11px] px-3 py-1.5 flex items-center gap-1.5"
+          >
+            <Share2 className="w-3.5 h-3.5" />
+            <span>แชร์ดูสด</span>
+          </button>
+
+          {cloudConfigured && (
+            <button
+              onClick={onOpenCloudAccess}
+              title={canEditPlans ? 'บัญชีผู้แก้ไข' : 'เข้าสู่ระบบบัญชีผู้แก้ไข'}
+              className="btn-ink text-[11px] px-3 py-1.5 flex items-center gap-1.5"
+            >
+              <LockKeyhole className="w-3.5 h-3.5" />
+              <span className="hidden lg:inline">{canEditPlans ? 'บัญชีผู้แก้ไข' : 'เข้าสู่ระบบ'}</span>
+              <span className="lg:hidden">{canEditPlans ? 'บัญชี' : 'ล็อกอิน'}</span>
+            </button>
+          )}
+
           <div className="flex-1 min-w-4"></div>
 
           {/* ===== THE "ADD TASK" BUTTON — Place a new story ===== */}
           <button
             onClick={onOpenNewPlanModal}
+            disabled={!canEditPlans}
             className="btn-ink btn-red text-xs sm:text-sm font-bold px-4 sm:px-6 py-2.5 flex items-center gap-2"
           >
             <span className="font-headline text-base leading-none">＋</span>
