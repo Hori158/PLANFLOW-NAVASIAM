@@ -14,8 +14,10 @@ import {
   AuditLogItem, 
   PlanStatus 
 } from './types';
+import type { User } from '@supabase/supabase-js';
 import { INITIAL_PLANS } from './data/initialPlans';
 import { exportPlansToCSV, parseCSVToPlans } from './utils/sheetSync';
+import { createSupabaseClient, fetchSharedPlans } from './utils/supabase';
 
 // Components
 import { Header } from './components/Header';
@@ -31,22 +33,28 @@ import { PlanFormModal } from './components/PlanFormModal';
 import { SheetSetupModal } from './components/SheetSetupModal';
 import { AuditLogModal } from './components/AuditLogModal';
 import { PhotoViewModal } from './components/PhotoViewModal';
+import { CloudAccessModal } from './components/CloudAccessModal';
+import { ReadOnlySnapshot } from './components/ReadOnlySnapshot';
+import { SupabaseSetupModal } from './components/SupabaseSetupModal';
 
 const LOCAL_STORAGE_KEY = 'plantrack_plans_v1';
 const SYNC_CONFIG_KEY = 'plantrack_sync_config_v1';
 const AUDIT_LOGS_KEY = 'plantrack_audit_logs_v1';
 
+function loadLocalPlans(): PlanItem[] {
+  try {
+    const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (saved) return JSON.parse(saved) as PlanItem[];
+  } catch (error) {
+    console.error('Could not load plans from local storage', error);
+  }
+  return INITIAL_PLANS;
+}
+
 export function App() {
   // 1. Data States
-  const [plans, setPlans] = useState<PlanItem[]>(() => {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (saved) return JSON.parse(saved);
-    } catch (e) {
-      console.error(e);
-    }
-    return INITIAL_PLANS;
-  });
+  const [plans, setPlans] = useState<PlanItem[]>(loadLocalPlans);
+  const [localPlansForMigration, setLocalPlansForMigration] = useState<PlanItem[]>(loadLocalPlans);
 
   const [syncConfig, setSyncConfig] = useState<SyncConfig>(() => {
     try {
@@ -61,7 +69,9 @@ export function App() {
       appSheetAccessKey: '',
       autoSyncInterval: 30,
       isLiveMode: false,
-      lastSyncTime: new Date().toISOString()
+      lastSyncTime: new Date().toISOString(),
+      supabaseUrl: '',
+      supabaseAnonKey: ''
     };
   });
 
@@ -112,6 +122,16 @@ export function App() {
 
   // 3. UI Status & Toast Notification
   const [isSyncing, setIsSyncing] = useState(false);
+  const [cloudUser, setCloudUser] = useState<User | null>(null);
+  const [isCloudAccessOpen, setIsCloudAccessOpen] = useState(false);
+  const supabaseClient = useMemo(
+    () => syncConfig.supabaseUrl && syncConfig.supabaseAnonKey
+      ? createSupabaseClient(syncConfig.supabaseUrl, syncConfig.supabaseAnonKey)
+      : null,
+    [syncConfig.supabaseUrl, syncConfig.supabaseAnonKey]
+  );
+  const hasCloudConfig = Boolean(syncConfig.supabaseUrl && syncConfig.supabaseAnonKey);
+  const canEditPlans = !hasCloudConfig || Boolean(cloudUser);
   const [toastMessage, setToastMessage] = useState<{ title: string; desc: string; type: 'success' | 'info' | 'warning' } | null>({
     title: '📰 ยินดีต้อนรับสู่ PLANFLOW NAVASIAM (P.NVS)',
     desc: 'หนังสือพิมพ์แผนงานรายวัน — อ่านพาดหัว ตรวจสถานะทุกชิ้นงาน และกดปุ่ม "เพิ่มงาน" เพื่อลงข่าวใหม่',
@@ -123,6 +143,7 @@ export function App() {
   const [editingPlan, setEditingPlan] = useState<PlanItem | null>(null);
   const [isNewPlanModalOpen, setIsNewPlanModalOpen] = useState(false);
   const [isSetupModalOpen, setIsSetupModalOpen] = useState(false);
+  const [isSupabaseSetupOpen, setIsSupabaseSetupOpen] = useState(false);
   const [isAuditLogOpen, setIsAuditLogOpen] = useState(false);
   const [previewPhoto, setPreviewPhoto] = useState<{ url: string; title: string } | null>(null);
 
@@ -137,11 +158,11 @@ export function App() {
   // Persist plans & config
   useEffect(() => {
     try {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(plans));
+      if (!supabaseClient) localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(plans));
     } catch (e) {
       console.error(e);
     }
-  }, [plans]);
+  }, [plans, supabaseClient]);
 
   useEffect(() => {
     try {
@@ -158,6 +179,82 @@ export function App() {
       console.error(e);
     }
   }, [logs]);
+
+  useEffect(() => {
+    if (!supabaseClient) {
+      setCloudUser(null);
+      return;
+    }
+
+    let active = true;
+    void supabaseClient.auth.getSession().then(({ data, error }) => {
+      if (error) console.error('Could not read Supabase session', error);
+      if (active) setCloudUser(data.session?.user ?? null);
+    });
+    const { data: { subscription } } = supabaseClient.auth.onAuthStateChange((_event, session) => {
+      setCloudUser(session?.user ?? null);
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, [supabaseClient]);
+
+  useEffect(() => {
+    if (!supabaseClient) return;
+
+    let active = true;
+    const loadPlans = async () => {
+      try {
+        const remotePlans = await fetchSharedPlans(supabaseClient);
+        if (active) {
+          setPlans(remotePlans);
+          setSyncConfig(prev => ({ ...prev, lastSyncTime: new Date().toISOString() }));
+        }
+      } catch (error) {
+        console.error('Could not load plans from Supabase', error);
+        if (active) setToastMessage({
+          title: 'เชื่อมต่อฐานข้อมูลกลางไม่สำเร็จ',
+          desc: error instanceof Error ? error.message : 'ตรวจสอบ Supabase URL, key และการตั้งค่าตาราง',
+          type: 'warning'
+        });
+      }
+    };
+
+    void loadPlans();
+    const channel = supabaseClient
+      .channel('planflow-owner-plans')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'plan_items' }, () => void loadPlans())
+      .subscribe(status => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.error(`Supabase realtime subscription status: ${status}`);
+        }
+      });
+
+    return () => {
+      active = false;
+      void supabaseClient.removeChannel(channel);
+    };
+  }, [supabaseClient]);
+
+  const savePlanToCloud = useCallback(async (plan: PlanItem) => {
+    if (!supabaseClient) return;
+    if (!cloudUser) throw new Error('เข้าสู่ระบบบัญชีผู้แก้ไขก่อนบันทึกข้อมูลส่วนกลาง');
+
+    const { error } = await supabaseClient
+      .from('plan_items')
+      .upsert({ id: plan.id, data: plan, updated_at: new Date().toISOString() });
+    if (error) throw error;
+  }, [cloudUser, supabaseClient]);
+
+  const deletePlanFromCloud = useCallback(async (id: string) => {
+    if (!supabaseClient) return;
+    if (!cloudUser) throw new Error('เข้าสู่ระบบบัญชีผู้แก้ไขก่อนลบข้อมูลส่วนกลาง');
+
+    const { error } = await supabaseClient.from('plan_items').delete().eq('id', id);
+    if (error) throw error;
+  }, [cloudUser, supabaseClient]);
 
   // Add Log Helper
   const addAuditLog = useCallback((logData: Omit<AuditLogItem, 'id' | 'timestamp'>) => {
@@ -259,11 +356,30 @@ export function App() {
   const handleManualSync = async () => {
     setIsSyncing(true);
 
-    if (syncConfig.isLiveMode && syncConfig.sheetUrl) {
+    if (supabaseClient) {
       try {
-        const resp = await fetch(syncConfig.sheetUrl, { method: 'GET' });
+        const remotePlans = await fetchSharedPlans(supabaseClient);
+        setPlans(remotePlans);
+        setSyncConfig(prev => ({ ...prev, lastSyncTime: new Date().toISOString() }));
+        setToastMessage({
+          title: 'รับข้อมูลจากฐานข้อมูลกลางแล้ว',
+          desc: `ข้อมูล ${remotePlans.length} รายการเป็นข้อมูลล่าสุด`,
+          type: 'success'
+        });
+      } catch (error) {
+        console.error('Manual Supabase refresh failed', error);
+        setToastMessage({
+          title: 'โหลดข้อมูลส่วนกลางไม่สำเร็จ',
+          desc: error instanceof Error ? error.message : 'โปรดตรวจสอบการตั้งค่า Supabase',
+          type: 'warning'
+        });
+      }
+    } else if (syncConfig.isLiveMode && syncConfig.sheetUrl) {
+      try {
+        const resp = await fetch(syncConfig.sheetUrl, { method: 'GET', cache: 'no-store' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const json = await resp.json();
-        if (json && json.data && Array.isArray(json.data) && json.data.length > 0) {
+        if (json && json.data && Array.isArray(json.data)) {
           setPlans(json.data);
           setToastMessage({
             title: 'ดึงข้อมูล Google Sheets สำเร็จ!',
@@ -271,29 +387,34 @@ export function App() {
             type: 'success'
           });
         }
-      } catch (err) {
+      } catch (error) {
+        console.error('Google Sheets refresh failed', error);
         setToastMessage({
-          title: 'จำลองการซิงค์ข้อมูล (Simulated)',
-          desc: 'ตรวจสอบการเชื่อมต่อ Google Sheets แล้ว ข้อมูลในระบบเป็นปัจจุบัน',
-          type: 'info'
+          title: 'ดึงข้อมูล Google Sheets ไม่สำเร็จ',
+          desc: error instanceof Error ? error.message : 'ตรวจสอบ URL และสิทธิ์การเข้าถึง',
+          type: 'warning'
         });
       }
     } else {
       // Simulation delay
       await new Promise(r => setTimeout(r, 600));
       setToastMessage({
-        title: 'ซิงค์ข้อมูลเรียลไทม์เรียบร้อย',
-        desc: 'ตรวจสอบข้อมูลกับ Google Sheets ล่าสุด ข้อมูลทุกแผนงานตรงกัน',
-        type: 'success'
+        title: 'ข้อมูลอยู่ในเครื่องนี้เท่านั้น',
+        desc: 'ตั้งค่า Supabase เพื่อแชร์ข้อมูลเดียวกันแบบเรียลไทม์ระหว่างผู้ใช้',
+        type: 'info'
       });
     }
 
-    setSyncConfig(prev => ({ ...prev, lastSyncTime: new Date().toISOString() }));
+    if (!supabaseClient) setSyncConfig(prev => ({ ...prev, lastSyncTime: new Date().toISOString() }));
     setIsSyncing(false);
   };
 
   // Simulate an incoming update from AppSheet mobile user
-  const handleSimulateAppSheetUpdate = () => {
+  const handleSimulateAppSheetUpdate = async () => {
+    if (!canEditPlans) {
+      setToastMessage({ title: 'ดูได้อย่างเดียว', desc: 'เข้าสู่ระบบบัญชีผู้แก้ไขก่อน', type: 'info' });
+      return;
+    }
     // Pick an active plan to update
     const activePlans = plans.filter(p => p.status !== 'completed');
     if (activePlans.length === 0) {
@@ -320,7 +441,14 @@ export function App() {
       evidenceUrl: targetPlan.evidenceUrl || 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=800&auto=format&fit=crop&q=80'
     };
 
-    setPlans(prev => prev.map(p => p.id === updatedPlan.id ? updatedPlan : p));
+    try {
+      await savePlanToCloud(updatedPlan);
+      setPlans(prev => prev.map(p => p.id === updatedPlan.id ? updatedPlan : p));
+    } catch (error) {
+      console.error('Could not save simulated update', error);
+      setToastMessage({ title: 'บันทึกข้อมูลไม่สำเร็จ', desc: error instanceof Error ? error.message : 'ลองใหม่อีกครั้ง', type: 'warning' });
+      return;
+    }
 
     addAuditLog({
       action: 'checkin',
@@ -339,59 +467,83 @@ export function App() {
   };
 
   // Status Change Inline
-  const handleStatusChange = (id: string, newStatus: PlanStatus) => {
+  const handleStatusChange = async (id: string, newStatus: PlanStatus) => {
+    if (!canEditPlans) {
+      setToastMessage({ title: 'ดูได้อย่างเดียว', desc: 'เข้าสู่ระบบบัญชีผู้แก้ไขก่อน', type: 'info' });
+      return;
+    }
     const todayStr = new Date().toISOString().slice(0, 10);
-    setPlans(prev => prev.map(p => {
-      if (p.id === id) {
-        const updated: PlanItem = {
-          ...p,
-          status: newStatus,
-          progress: newStatus === 'completed' ? 100 : (newStatus === 'not_started' ? 0 : p.progress),
-          actualEndDate: newStatus === 'completed' ? (p.actualEndDate || todayStr) : p.actualEndDate,
-          lastUpdated: new Date().toISOString(),
-          syncStatus: 'synced'
-        };
-
-        addAuditLog({
-          action: 'status_change',
-          taskId: p.id,
-          taskTitle: p.taskTitle,
-          user: 'ผู้บริหารระบบ (Web Dashboard)',
-          details: `เปลี่ยนสถานะเป็น ${newStatus}`,
-          syncResult: 'success'
-        });
-
-        return updated;
-      }
-      return p;
-    }));
+    const plan = plans.find(item => item.id === id);
+    if (!plan) return;
+    const updated: PlanItem = {
+      ...plan,
+      status: newStatus,
+      progress: newStatus === 'completed' ? 100 : (newStatus === 'not_started' ? 0 : plan.progress),
+      actualEndDate: newStatus === 'completed' ? (plan.actualEndDate || todayStr) : plan.actualEndDate,
+      lastUpdated: new Date().toISOString(),
+      syncStatus: 'synced'
+    };
+    try {
+      await savePlanToCloud(updated);
+      setPlans(prev => prev.map(item => item.id === id ? updated : item));
+      addAuditLog({
+        action: 'status_change',
+        taskId: plan.id,
+        taskTitle: plan.taskTitle,
+        user: cloudUser?.email || 'ผู้บริหารระบบ (Web Dashboard)',
+        details: `เปลี่ยนสถานะเป็น ${newStatus}`,
+        syncResult: 'success'
+      });
+    } catch (error) {
+      console.error('Could not save status change', error);
+      setToastMessage({ title: 'บันทึกสถานะไม่สำเร็จ', desc: error instanceof Error ? error.message : 'ลองใหม่อีกครั้ง', type: 'warning' });
+      return;
+    }
 
     setToastMessage({
       title: 'อัปเดตสถานะสำเร็จ',
-      desc: `บันทึกสถานะงาน ${id} และส่งข้อมูลกลับ Google Sheets ทันที`,
+      desc: `บันทึกสถานะงาน ${id} ลงฐานข้อมูลกลางแล้ว`,
       type: 'success'
     });
   };
 
   // Progress Change Inline
-  const handleProgressChange = (id: string, newProgress: number) => {
-    setPlans(prev => prev.map(p => {
-      if (p.id === id) {
-        const newStatus: PlanStatus = newProgress === 100 ? 'completed' : (newProgress === 0 ? 'not_started' : 'in_progress');
-        return {
-          ...p,
-          progress: newProgress,
-          status: newStatus,
-          lastUpdated: new Date().toISOString(),
-          syncStatus: 'synced'
-        };
-      }
-      return p;
-    }));
+  const handleProgressChange = async (id: string, newProgress: number) => {
+    if (!canEditPlans) {
+      setToastMessage({ title: 'ดูได้อย่างเดียว', desc: 'เข้าสู่ระบบบัญชีผู้แก้ไขก่อน', type: 'info' });
+      return;
+    }
+    const plan = plans.find(item => item.id === id);
+    if (!plan) return;
+    const updated: PlanItem = {
+      ...plan,
+      progress: newProgress,
+      status: newProgress === 100 ? 'completed' : (newProgress === 0 ? 'not_started' : 'in_progress'),
+      lastUpdated: new Date().toISOString(),
+      syncStatus: 'synced'
+    };
+    try {
+      await savePlanToCloud(updated);
+      setPlans(prev => prev.map(item => item.id === id ? updated : item));
+    } catch (error) {
+      console.error('Could not save progress change', error);
+      setToastMessage({ title: 'บันทึกความคืบหน้าไม่สำเร็จ', desc: error instanceof Error ? error.message : 'ลองใหม่อีกครั้ง', type: 'warning' });
+    }
   };
 
   // Save Check-in
-  const handleSaveCheckIn = (updatedPlan: PlanItem) => {
+  const handleSaveCheckIn = async (updatedPlan: PlanItem) => {
+    if (!canEditPlans) {
+      setToastMessage({ title: 'ดูได้อย่างเดียว', desc: 'เข้าสู่ระบบบัญชีผู้แก้ไขก่อน', type: 'info' });
+      return;
+    }
+    try {
+      await savePlanToCloud(updatedPlan);
+    } catch (error) {
+      console.error('Could not save check-in', error);
+      setToastMessage({ title: 'บันทึกการตรวจรับไม่สำเร็จ', desc: error instanceof Error ? error.message : 'ลองใหม่อีกครั้ง', type: 'warning' });
+      return;
+    }
     setPlans(prev => prev.map(p => p.id === updatedPlan.id ? updatedPlan : p));
     setCheckInPlan(null);
 
@@ -406,13 +558,25 @@ export function App() {
 
     setToastMessage({
       title: '🎉 บันทึกการตรวจรับงานเรียบร้อย!',
-      desc: `งาน "${updatedPlan.taskTitle}" ได้รับการบันทึกผลงานลง Google Sheet เรียบร้อยแล้ว`,
+      desc: `บันทึกผลงาน "${updatedPlan.taskTitle}" ลงฐานข้อมูลกลางแล้ว`,
       type: 'success'
     });
   };
 
   // Save or Create Plan from Form Modal
-  const handleSavePlanForm = (planData: PlanItem) => {
+  const handleSavePlanForm = async (planData: PlanItem) => {
+    if (!canEditPlans) {
+      setToastMessage({ title: 'ดูได้อย่างเดียว', desc: 'เข้าสู่ระบบบัญชีผู้แก้ไขก่อน', type: 'info' });
+      return;
+    }
+    try {
+      await savePlanToCloud(planData);
+    } catch (error) {
+      console.error('Could not save plan', error);
+      setToastMessage({ title: 'บันทึกแผนงานไม่สำเร็จ', desc: error instanceof Error ? error.message : 'ลองใหม่อีกครั้ง', type: 'warning' });
+      return;
+    }
+
     const isExisting = plans.some(p => p.id === planData.id);
     if (isExisting) {
       setPlans(prev => prev.map(p => p.id === planData.id ? planData : p));
@@ -441,7 +605,7 @@ export function App() {
       });
       setToastMessage({
         title: 'สร้างแผนงานใหม่สำเร็จ!',
-        desc: `เพิ่ม ${planData.id} เข้าสู่ Google Sheet เรียบร้อย`,
+        desc: `เพิ่ม ${planData.id} ลงฐานข้อมูลกลางแล้ว`,
         type: 'success'
       });
     }
@@ -450,9 +614,20 @@ export function App() {
   };
 
   // Delete Plan
-  const handleDeletePlan = (id: string) => {
+  const handleDeletePlan = async (id: string) => {
+    if (!canEditPlans) {
+      setToastMessage({ title: 'ดูได้อย่างเดียว', desc: 'เข้าสู่ระบบบัญชีผู้แก้ไขก่อน', type: 'info' });
+      return;
+    }
     if (window.confirm(`ยืนยันการลบแผนงานรหัส ${id} ใช่หรือไม่?`)) {
       const plan = plans.find(p => p.id === id);
+      try {
+        await deletePlanFromCloud(id);
+      } catch (error) {
+        console.error('Could not delete plan', error);
+        setToastMessage({ title: 'ลบแผนงานไม่สำเร็จ', desc: error instanceof Error ? error.message : 'ลองใหม่อีกครั้ง', type: 'warning' });
+        return;
+      }
       setPlans(prev => prev.filter(p => p.id !== id));
       if (plan) {
         addAuditLog({
@@ -484,12 +659,29 @@ export function App() {
 
   // Import CSV
   const handleImportCSV = (file: File) => {
+    if (!canEditPlans) {
+      setToastMessage({ title: 'ดูได้อย่างเดียว', desc: 'เข้าสู่ระบบบัญชีผู้แก้ไขก่อนนำเข้าข้อมูล', type: 'info' });
+      return;
+    }
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       const text = e.target?.result as string;
       if (text) {
         const imported = parseCSVToPlans(text);
         if (imported.length > 0) {
+          try {
+            if (supabaseClient) {
+              if (!cloudUser) throw new Error('เข้าสู่ระบบก่อนนำเข้าข้อมูลส่วนกลาง');
+              const { error } = await supabaseClient.from('plan_items').upsert(
+                imported.map(plan => ({ id: plan.id, data: plan, updated_at: new Date().toISOString() }))
+              );
+              if (error) throw error;
+            }
+          } catch (error) {
+            console.error('Could not import plans to shared database', error);
+            setToastMessage({ title: 'นำเข้าข้อมูลไม่สำเร็จ', desc: error instanceof Error ? error.message : 'ตรวจสอบการเชื่อมต่อ', type: 'warning' });
+            return;
+          }
           setPlans(imported);
           setToastMessage({
             title: 'นำเข้าข้อมูล CSV สำเร็จ!',
@@ -519,16 +711,78 @@ export function App() {
     }
   }, [syncConfig.lastSyncTime]);
 
+  const shareLiveView = async () => {
+    if (!syncConfig.supabaseUrl || !syncConfig.supabaseAnonKey) {
+      setIsSupabaseSetupOpen(true);
+      return;
+    }
+
+    const shareUrl = new URL(window.location.href);
+    shareUrl.search = '';
+    shareUrl.searchParams.set('view', 'readonly');
+    shareUrl.searchParams.set('sbUrl', syncConfig.supabaseUrl);
+    shareUrl.searchParams.set('sbKey', syncConfig.supabaseAnonKey);
+    try {
+      await navigator.clipboard.writeText(shareUrl.toString());
+      setToastMessage({
+        title: 'คัดลอกลิงก์ดูสดแล้ว',
+        desc: 'ผู้รับลิงก์ดูได้อย่างเดียว และจะเห็นข้อมูลส่วนกลางที่อัปเดตแบบเรียลไทม์',
+        type: 'success'
+      });
+    } catch (error) {
+      console.error('Could not copy live share URL', error);
+      setToastMessage({
+        title: 'คัดลอกลิงก์ไม่สำเร็จ',
+        desc: 'เบราว์เซอร์ไม่อนุญาตให้คัดลอก กรุณาเปิดการตั้งค่าคลาวด์เพื่อสร้างลิงก์ใหม่',
+        type: 'warning'
+      });
+    }
+  };
+
+  const seedPlansToCloud = async () => {
+    if (!supabaseClient || !cloudUser) throw new Error('เข้าสู่ระบบบัญชีผู้แก้ไขก่อนนำเข้าข้อมูล');
+    const plansToSeed = localPlansForMigration.length ? localPlansForMigration : plans;
+    if (plansToSeed.length === 0) throw new Error('ไม่มีข้อมูลในเครื่องให้นำเข้า');
+    const { data: existing, error: readError } = await supabaseClient
+      .from('plan_items')
+      .select('id')
+      .limit(1);
+    if (readError) throw readError;
+    if (existing && existing.length > 0) {
+      throw new Error('ฐานข้อมูลส่วนกลางมีข้อมูลแล้ว เพื่อป้องกันข้อมูลเดิมถูกเขียนทับ จึงยกเลิกการนำเข้า');
+    }
+    const { error } = await supabaseClient.from('plan_items').insert(
+      plansToSeed.map(plan => ({ id: plan.id, data: plan, updated_at: new Date().toISOString() }))
+    );
+    if (error) throw error;
+    setLocalPlansForMigration([]);
+  };
+
+  const query = new URLSearchParams(window.location.search);
+  const isSharedReadOnly = query.get('view') === 'readonly';
+  if (isSharedReadOnly) {
+    return (
+      <ReadOnlySnapshot
+        supabaseUrl={query.get('sbUrl') || ''}
+        supabaseAnonKey={query.get('sbKey') || ''}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col">
       
       {/* 1. Newspaper Masthead + Toolbar */}
       <Header
-        syncConfig={syncConfig}
         isSyncing={isSyncing}
         onManualSync={handleManualSync}
         onSimulateAppSheetUpdate={handleSimulateAppSheetUpdate}
         onOpenSetup={() => setIsSetupModalOpen(true)}
+        onOpenCloudSetup={() => setIsSupabaseSetupOpen(true)}
+        onOpenCloudAccess={() => setIsCloudAccessOpen(true)}
+        onShareLiveView={() => void shareLiveView()}
+        canEditPlans={canEditPlans}
+        cloudConfigured={Boolean(supabaseClient)}
         onOpenAuditLogs={() => setIsAuditLogOpen(true)}
         onOpenNewPlanModal={() => {
           setEditingPlan(null);
@@ -591,7 +845,7 @@ export function App() {
         />
 
         {/* Dynamic View Body — animated on view switch */}
-        <div key={viewMode} className="animate-rise">
+        <div key={viewMode} className="animate-rise" inert={supabaseClient && !canEditPlans ? true : undefined}>
         {viewMode === 'table' && (
           <TableView
             plans={filteredPlans}
@@ -703,6 +957,31 @@ export function App() {
             });
           }}
           onImportCSV={handleImportCSV}
+        />
+      )}
+
+      {isSupabaseSetupOpen && (
+        <SupabaseSetupModal
+          config={syncConfig}
+          client={supabaseClient}
+          user={cloudUser}
+          plans={localPlansForMigration.length ? localPlansForMigration : plans}
+          onClose={() => setIsSupabaseSetupOpen(false)}
+          onSave={newConfig => {
+            if (!supabaseClient) setLocalPlansForMigration(plans);
+            setSyncConfig(newConfig);
+          }}
+          onSignIn={() => setIsCloudAccessOpen(true)}
+          onSeedPlans={seedPlansToCloud}
+        />
+      )}
+
+      {isCloudAccessOpen && supabaseClient && (
+        <CloudAccessModal
+          client={supabaseClient}
+          user={cloudUser}
+          onClose={() => setIsCloudAccessOpen(false)}
+          onSignedOut={() => setCloudUser(null)}
         />
       )}
 
