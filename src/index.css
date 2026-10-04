@@ -1,0 +1,189 @@
+@import "tailwindcss";
+
+:root {
+  --paper: #f3ecdb;
+  --paper-card: #faf6ea;
+  --ink: #211a12;
+  --ink-soft: #57493a;
+  --ink-faint: #8d7d68;
+  --red-ink: #9e2b25;
+  --green-ink: #33603f;
+  --blue-ink: #2d5370;
+  --amber-ink: #8a6520;
+}
+
+@layer base {
+  body {
+    font-family: 'Srisakdi', 'Playfair Display', Georgia, 'Times New Roman', serif;
+    background-color: var(--paper);
+    color: var(--ink);
+    background-image:
+      radial-gradient(ellipse at 50% -10%, rgba(255, 253, 244, 0.9), transparent 55%),
+      repeating-linear-gradient(0deg, rgba(133, 110, 77, 0.045) 0px, rgba(133, 110, 77, 0.045) 1px, transparent 1px, transparent 3px),
+      radial-gradient(ellipse at center, transparent 55%, rgba(120, 95, 60, 0.16) 100%);
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Make all white/gray cards feel like cream newsprint */
+  .bg-white { background-color: var(--paper-card) !important; }
+  .bg-slate-50 { background-color: #f0e9d6 !important; }
+  .bg-slate-100 { background-color: #e9e0c9 !important; }
+  .bg-slate-50\/80, .bg-slate-50\/70, .bg-slate-50\/60, .bg-slate-50\/40 { background-color: rgba(240, 233, 214, 0.75) !important; }
+  .bg-slate-100\/90 { background-color: #e9e0c9 !important; }
+}
+
+/* ---------- Typography helpers ---------- */
+.font-headline { font-family: 'Archivo Black', 'Srisakdi', serif; }
+.font-display  { font-family: 'Playfair Display', 'Srisakdi', serif; }
+.font-type     { font-family: 'Special Elite', 'Courier New', monospace; }
+
+/* ---------- Newspaper rules ---------- */
+.rule-double { border-top: 4px double var(--ink); }
+.rule-heavy  { border-top: 3px solid var(--ink); }
+.rule-triple {
+  border-top: 1px solid var(--ink);
+  box-shadow: 0 3px 0 -1px var(--ink), 0 6px 0 -5px var(--ink);
+}
+.rule-h-double { border-bottom: 4px double var(--ink); }
+
+/* ---------- Paper card ---------- */
+.paper-card {
+  background-color: var(--paper-card);
+  border: 1px solid var(--ink);
+  box-shadow: 3px 3px 0 rgba(33, 26, 18, 0.14);
+}
+
+/* ---------- Typewriter button ---------- */
+.btn-ink {
+  font-family: 'Special Elite', 'Courier New', monospace;
+  border: 1.5px solid var(--ink);
+  background: var(--paper-card);
+  color: var(--ink);
+  box-shadow: 2px 2px 0 rgba(33, 26, 18, 0.85);
+  transition: all 0.12s ease;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn-ink:hover { transform: translate(1px, 1px); box-shadow: 1px 1px 0 rgba(33, 26, 18, 0.85); background: #fffdf4; }
+.btn-ink:active { transform: translate(2px, 2px); box-shadow: 0 0 0; }
+.btn-ink:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-ink.btn-red { background: var(--red-ink); color: #fdf8ec; border-color: #5f1512; }
+.btn-ink.btn-red:hover { background: #b23a33; }
+
+/* ---------- Rubber stamp ---------- */
+.stamp {
+  font-family: 'Special Elite', 'Courier New', monospace;
+  display: inline-block;
+  border: 2px solid currentColor;
+  border-radius: 3px;
+  padding: 0 0.5rem;
+  transform: rotate(-2deg);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1.4;
+}
+
+/* ---------- Drop cap ---------- */
+.drop-cap::first-letter {
+  float: left;
+  font-family: 'Archivo Black', 'Srisakdi', serif;
+  font-size: 3.1em;
+  line-height: 0.85;
+  padding: 0.06em 0.14em 0 0;
+}
+
+/* ---------- Halftone photo texture ---------- */
+.photo-bw {
+  filter: grayscale(1) contrast(1.08) sepia(0.18);
+  transition: filter 0.3s ease;
+}
+.group:hover .photo-bw, .photo-bw:hover { filter: grayscale(0.2) contrast(1.02) sepia(0.05); }
+
+/* ---------- News ticker ---------- */
+@keyframes ticker-scroll {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.ticker-track {
+  display: inline-flex;
+  white-space: nowrap;
+  animation: ticker-scroll 45s linear infinite;
+}
+.ticker-track:hover { animation-play-state: paused; }
+
+/* ---------- Misc ---------- */
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.animate-pulse-subtle { animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+/* ---------- Animations ---------- */
+@keyframes stamp-in {
+  0%   { opacity: 0; transform: scale(1.8) rotate(10deg); }
+  55%  { opacity: 1; transform: scale(0.92) rotate(-4deg); }
+  100% { opacity: 1; transform: scale(1) rotate(-2deg); }
+}
+.animate-stamp { animation: stamp-in 0.45s cubic-bezier(0.2, 0.8, 0.3, 1.2) both; }
+
+@keyframes stamp-wrap-in {
+  0%   { opacity: 0; transform: scale(1.5); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.animate-stamp-wrap { animation: stamp-wrap-in 0.4s ease-out both; }
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-rise { animation: rise-in 0.5s cubic-bezier(0.2, 0.8, 0.3, 1) both; }
+
+@keyframes fade-in-simple {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.animate-fade { animation: fade-in-simple 0.4s ease-out both; }
+
+@keyframes pop-in {
+  0%   { opacity: 0; transform: scale(0.94) translateY(12px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+.animate-pop { animation: pop-in 0.3s cubic-bezier(0.2, 0.8, 0.3, 1.15) both; }
+
+@keyframes flash-row {
+  0%   { background-color: rgba(51, 96, 63, 0.14); }
+  100% { background-color: transparent; }
+}
+.animate-flash { animation: flash-row 1.1s ease-out both; }
+
+/* Respect users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .animate-stamp, .animate-stamp-wrap, .animate-rise, .animate-fade,
+  .animate-pop, .animate-flash, .animate-pulse-subtle, .ticker-track {
+    animation: none !important;
+  }
+}
+
+.leaders {
+  flex: 1;
+  border-bottom: 2px dotted rgba(33, 26, 18, 0.5);
+  margin: 0 0.5rem 0.35em 0.5rem;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--paper); }
+::-webkit-scrollbar-thumb { background: var(--ink-soft); border: 2px solid var(--paper); }
+
+input[type='range'] { accent-color: var(--ink); }
+select, input { color: var(--ink); }
+
+/* ---------- Print: real newspaper output ---------- */
+@media print {
+  body { background: #ffffff !important; }
+  .no-print { display: none !important; }
+  .paper-card { box-shadow: none !important; }
+  main { max-width: 100% !important; padding: 0 !important; }
+  .ticker-track { animation: none !important; }
+}
